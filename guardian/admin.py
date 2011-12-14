@@ -61,6 +61,23 @@ class GuardedModelAdmin(admin.ModelAdmin):
 
         *Default*: ``admin/guardian/model/obj_perms_manage_group.html``
 
+    ``GuardedModelAdmin.user_can_access_owned_objects_only``
+
+        *Default*: ``False``
+
+        If this would be set to ``True``, ``request.user`` would be used to
+        filter out objects he or she doesn't own (checking ``user`` field
+        of used model - field name may be overridden by
+        ``user_owned_objects_field`` option.
+
+        .. note::
+           Please remember that this will **NOT** affect superusers!
+           Admins would still see all items.
+
+    ``GuardedModelAdmin.user_owned_objects_field``
+
+        *Default*: ``user``
+
     **Usage example**
 
     Just use :admin:`GuardedModelAdmin` instead of
@@ -87,6 +104,16 @@ class GuardedModelAdmin(admin.ModelAdmin):
         'admin/guardian/model/obj_perms_manage_user.html'
     obj_perms_manage_group_template = \
         'admin/guardian/model/obj_perms_manage_group.html'
+    user_can_access_owned_objects_only = False
+    user_owned_objects_field = 'user'
+
+    def queryset(self, request):
+        qs = super(GuardedModelAdmin, self).queryset(request)
+        if self.user_can_access_owned_objects_only and \
+            not request.user.is_superuser:
+            filters = {self.user_owned_objects_field: request.user}
+            qs = qs.filter(**filters)
+        return qs
 
     def get_urls(self):
         """
@@ -124,6 +151,7 @@ class GuardedModelAdmin(admin.ModelAdmin):
         related content.
         """
         context = {
+            'adminform': {'model_admin': self},
             'object': obj,
             'app_label': self.model._meta.app_label,
             'opts': self.model._meta,
@@ -145,7 +173,8 @@ class GuardedModelAdmin(admin.ModelAdmin):
         """
         obj = get_object_or_404(self.queryset(request), pk=object_pk)
         users_perms = SortedDict(
-            get_users_with_perms(obj, attach_perms=True))
+            get_users_with_perms(obj, attach_perms=True,
+                with_group_users=False))
         users_perms.keyOrder.sort(key=lambda user: user.username)
         groups_perms = SortedDict(
             get_groups_with_perms(obj, attach_perms=True))

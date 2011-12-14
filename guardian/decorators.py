@@ -1,15 +1,17 @@
-
 from django.conf import settings
 from django.contrib.auth import REDIRECT_FIELD_NAME
+from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseForbidden, HttpResponseRedirect
 from django.utils.functional import wraps
 from django.utils.http import urlquote
 from django.db.models import Model, get_model
 from django.db.models.base import ModelBase
 from django.db.models.query import QuerySet
-from django.shortcuts import get_object_or_404
-
+from django.shortcuts import get_object_or_404, render_to_response
+from django.template import RequestContext, TemplateDoesNotExist
+from guardian.conf import settings as guardian_settings
 from guardian.exceptions import GuardianError
+
 
 def permission_required(perm, lookup_variables=None, **kwargs):
     """
@@ -26,7 +28,14 @@ def permission_required(perm, lookup_variables=None, **kwargs):
       Defaults to ``django.contrib.auth.REDIRECT_FIELD_NAME``.
     :param return_403: if set to ``True`` then instead of redirecting to the
       login page, response with status code 403 is returned (
-      ``django.http.HttpResponseForbidden`` instance). Defaults to ``False``.
+      ``django.http.HttpResponseForbidden`` instance or rendered template -
+      see :setting:`GUARDIAN_RENDER_403`). Defaults to ``False``.
+    :param accept_global_perms: if set to ``True``, then *object level
+      permission* would be required **only if user does NOT have global
+      permission** for target *model*. If turned on, makes this decorator
+      like an extension over standard
+      ``django.contrib.admin.decorators.permission_required`` as it would
+      check for global permissions first. Defaults to ``False``.
 
     Examples::
 
@@ -50,6 +59,7 @@ def permission_required(perm, lookup_variables=None, **kwargs):
     login_url = kwargs.pop('login_url', settings.LOGIN_URL)
     redirect_field_name = kwargs.pop('redirect_field_name', REDIRECT_FIELD_NAME)
     return_403 = kwargs.pop('return_403', False)
+    accept_global_perms = kwargs.pop('accept_global_perms', False)
 
     # Check if perm is given as string in order not to decorate
     # view function itself which makes debugging harder
@@ -92,8 +102,21 @@ def permission_required(perm, lookup_variables=None, **kwargs):
 
             # Handles both original and with object provided permission check
             # as ``obj`` defaults to None
-            if not request.user.has_perm(perm, obj):
+            has_perm = accept_global_perms and request.user.has_perm(perm)
+            if not has_perm and not request.user.has_perm(perm, obj):
                 if return_403:
+                    if guardian_settings.RENDER_403:
+                        try:
+                            response = render_to_response(
+                                guardian_settings.TEMPLATE_403, {},
+                                RequestContext(request))
+                            response.status_code = 403
+                            return response
+                        except TemplateDoesNotExist, e:
+                            if settings.DEBUG:
+                                raise e
+                    elif guardian_settings.RAISE_403:
+                        raise PermissionDenied
                     return HttpResponseForbidden()
                 else:
                     path = urlquote(request.get_full_path())
